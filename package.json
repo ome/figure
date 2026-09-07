@@ -1,7 +1,7 @@
 {
   "name": "omero-figure",
   "//": "Required to build but not used. See omero_figure/utils.py for version",
-  "version": "0.0.0",
+  "version": "0.1.0.dev0",
   "description": "OMERO figure creation app",
   "main": "index.js",
   "scripts": {

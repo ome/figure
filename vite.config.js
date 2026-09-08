@@ -26,6 +26,6 @@ let config = {
   assetsInclude: ["**/*.template.html"],
 }
 
-// NB: config.base is set to "/omero-figure/" in ghpages build (see package.json)
+// NB: config.base is set to "/figure/" in ghpages build (see package.json)
 
 export default defineConfig(config);

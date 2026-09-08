@@ -14,7 +14,7 @@ The workflow for creating figures can be summarised as follows:
 
  - Your OME-Zarr images need to be hosted at a URL that OME figure can access. If your images are on your local machine, we suggest that you use [FileGlancer](https://github.com/JaneliaSciComp/fileglancer) to serve them. You can use the `Copy link` button to get a URL that can be used in OME figure.
 
- - Create a new figure at [will-moore.github.io/figure/](https://will-moore.github.io/figure/), then `Add Images` and paste in the URL to your OME-Zarr image(s).
+ - Create a new figure at [ome.github.io/figure/](https://ome.github.io/figure/), then `Add Images` and paste in the URL to your OME-Zarr image(s).
 
  - Edit your figure. All the features are the same as OMERO.figure and you can find several useful [OMERO.figure tutorials on YouTube](https://www.youtube.com/results?search_query=OMERO.figure).
 
@@ -71,7 +71,7 @@ http://localhost:8080/shapeEditorTest.html
 
 ## Deploying the app to GitHub pages
 
-The standalone app is deployed to GitHub pages at https://will-moore.github.io/figure/ via a GitHub action defined in ``.github/workflows/pages.yml`` which acts on push to the `master` branch.
+The standalone app is deployed to GitHub pages at https://ome.github.io/figure/ via a GitHub action defined in ``.github/workflows/pages.yml`` which acts on push to the `master` branch.
 The action then builds the app and pushes the built files to the `gh-pages` branch.
 
 To deploy the app from your own fork, you can push to your own `master` branch and

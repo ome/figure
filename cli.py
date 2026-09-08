@@ -24,7 +24,7 @@ from ome_figure.Figure_To_Pdf import export_figure
 def figure_export() -> None:
     parser = argparse.ArgumentParser(
         prog="figure_export",
-        description="Export an OMERO Figure file.",
+        description="Export a figure.json file to PDF or TIFF.",
     )
     parser.add_argument("input", type=str, help="Path to the input file")
     parser.add_argument("output", type=str, help="Path to the output file")

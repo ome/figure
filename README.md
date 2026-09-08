@@ -52,7 +52,7 @@ We use `vite.js <https://vitejs.dev/>`_ to build and serve the app during develo
 Install Node from https://nodejs.org, then:
 
 ```
-    $ cd omero-figure
+    $ cd figure
     $ npm install
     $ npm run dev     # or npm run start
 ```

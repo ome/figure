@@ -20,13 +20,12 @@ let config = {
   },
   build: {
     sourcemap: true,
-    // output into Django's static dir
-    outDir: "../omero_figure/static/omero_figure/"
+    outDir: path.resolve(__dirname, 'dist')
   },
 
   assetsInclude: ["**/*.template.html"],
 }
 
-// NB: config.base is set to "/omero-figure/" in ghpages build (see package.json)
+// NB: config.base is set to "/figure/" in ghpages build (see package.json)
 
 export default defineConfig(config);

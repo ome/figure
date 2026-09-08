@@ -3,7 +3,7 @@
 
 OME figure is a web app for creating publication figures from microscopy images.
 
-As a standalone tool, available at [will-moore.github.io/figure/](https://will-moore.github.io/figure/) it uses [OME-Zarr](https://ngff.openmicroscopy.org/) images, which can be hosted locally or publicly available at any remote URL.
+As a standalone tool, available at [ome.github.io/figure/](https://ome.github.io/figure/) it uses [OME-Zarr](https://ngff.openmicroscopy.org/) images, which can be hosted locally or publicly available at any remote URL.
 
 The app is also packaged as an OMERO.web plugin: [omero-figure](https://github.com/ome/omero-figure/), where this `figure` app was originally developed.
 
@@ -42,7 +42,7 @@ a public gist, with a chosen filename. Once created, e.g. [ngff_images_figure.js
 
 In the OME figure app, `File > Open` dialog, paste in this URL and click `Open`.
 The app will load the figure and the URL will show `?file=[YOUR URL]`.
-You can share the complete figure URL, for example https://will-moore.github.io/figure/?file=https://gist.githubusercontent.com/will-moore/75a7f0de5be0f7b4202d5f0229cadcc9/raw/ngff_images_figure.json 
+You can share the complete figure URL, for example https://ome.github.io/figure/?file=https://gist.githubusercontent.com/will-moore/75a7f0de5be0f7b4202d5f0229cadcc9/raw/ngff_images_figure.json 
 
 
 # Development

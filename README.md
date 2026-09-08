@@ -47,7 +47,7 @@ You can share the complete figure URL, for example https://ome.github.io/figure/
 
 # Development
 
-We use `vite.js <https://vitejs.dev/>`_ to build and serve the app during development.
+We use [vite.js](https://vitejs.dev/) to build and serve the app during development.
 
 Install Node from https://nodejs.org, then:
 

@@ -602,7 +602,6 @@
                     if (saveAsOmeZarr) {
                         options.saveAsOmeZarr = true;
                     }
-                    console.log("options.saveAsOmeZarr ", options.saveAsOmeZarr);
                     self.save_as(options);
                 });
             }

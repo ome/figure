@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 #
-# Copyright (c) 2014-2015 University of Dundee.
+# Copyright (c) 2014-2026 University of Dundee.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as
@@ -25,7 +25,6 @@ import html
 from datetime import datetime
 import os
 from os import path
-import zipfile
 from math import atan2, atan, sin, cos, sqrt, radians, floor, ceil, log2
 from copy import deepcopy
 import re
@@ -33,25 +32,11 @@ import re
 from io import BytesIO
 
 try:
-    from PIL import Image, ImageDraw, ImageFont
+    from PIL import Image, ImageFont
 except ImportError:
     import Image
-    import ImageDraw
 
 logger = logging.getLogger('figure_to_pdf')
-
-omero_installed = True
-try:
-    from omero.model import ImageAnnotationLinkI, ImageI, LengthI
-    import omero.scripts as scripts
-    from omero.gateway import BlitzGateway
-    from omero.rtypes import rstring, robject
-    from omero.model.enums import UnitsLength
-    from Glacier2 import PermissionDeniedException
-    from Ice import ConnectionRefusedException
-except ImportError:
-    omero_installed = False
-    logger.info("OMERO libraries not installed.")
 
 try:
     import markdown
@@ -82,24 +67,6 @@ ORIGINAL_DIR = "1_originals"
 RESAMPLED_DIR = "2_pre_resampled"
 FINAL_DIR = "3_final"
 
-README_TXT = """These folders contain images used in the creation
-of the figure. Each folder contains one image per figure panel,
-with images numbered according to the order they were added to
-the figure. The numbered folders represent the sequence of
-processing steps:
-
- - 1_originals: This contains the full-sized and un-cropped images that are
-   rendered by OMERO according to your chosen rendering settings.
-
- - 2_pre_resampled: This folder will only contain those images that are
-   resampled in order to match the export figure resolution. This will be
-   all panels for export of TIFF figures. For export of PDF Figures,
-   only panels that have a 'dpi' set, which is higher than their
-   existing resolution will be resampled.
-
- - 3_final: These are the image panels that are inserted into the
-   final figure, saved following any cropping, rotation and resampling steps.
-"""
 
 # Create a dict we can use for scalebar unit conversions
 # TODO: add more units as needed
@@ -119,34 +86,6 @@ def get_font(self, fontsize, bold=False, italics=False):
     # TODO load font from URL
     font = ImageFont.load_default()
     return font
-
-
-def scale_to_export_dpi(pixels):
-    """
-    Original figure coordinates assume 72 dpi figure, but we want to
-    export at 300 dpi, so everything needs scaling accordingly
-    """
-    return int(round(pixels * 300 / 72))
-
-
-def compress(target, base):
-    """
-    Creates a ZIP recursively from a given base directory.
-
-    @param target:      Name of the zip file we want to write E.g.
-                        "folder.zip"
-    @param base:        Name of folder that we want to zip up E.g. "folder"
-    """
-    zip_file = zipfile.ZipFile(target, 'w')
-    try:
-        for root, dirs, files in os.walk(base):
-            archive_root = os.path.relpath(root, base)
-            for f in files:
-                fullpath = os.path.join(root, f)
-                archive_name = os.path.join(archive_root, f)
-                zip_file.write(fullpath, archive_name)
-    finally:
-        zip_file.close()
 
 
 class Bounds(object):
@@ -647,401 +586,18 @@ class ShapeToPdfExport(ShapeExport):
         self.draw_shape_label(shape, label_bounds)
 
 
-class ShapeToPilExport(ShapeExport):
-    """
-    Class for drawing panel shapes onto a PIL image.
-    We get a PIL image, the panel dict, and crop coordinates
-    """
-
-    point_radius = 25
-
-    def __init__(self, pil_img, panel, crop):
-
-        self.pil_img = pil_img
-        self.panel = panel
-        # The crop region on the original image coordinates...
-        self.crop = crop
-        self.scale = pil_img.size[0] / crop['width']
-        self.draw = ImageDraw.Draw(pil_img)
-
-        super(ShapeToPilExport, self).__init__(panel)
-
-    def get_panel_coords(self, shape_x, shape_y):
-        """
-        Convert coordinate from the image onto the panel.
-        Handles zoom, offset & rotation of panel, rotating the
-        x, y point around the centre of the cropped region
-        and scaling appropriately
-        """
-        h_flip = self.panel.get('horizontal_flip', False)
-        v_flip = self.panel.get('vertical_flip', False)
-
-        # Apply flip transformations to the shape coordinates
-        if h_flip:
-            shape_x = self.crop['width'] - shape_x + 2 * self.crop['x']
-        if v_flip:
-            shape_y = self.crop['height'] - shape_y + 2 * self.crop['y']
-
-        rotation = self.panel['rotation']
-        if v_flip != h_flip:
-            rotation = -rotation
-        if rotation != 0:
-            # img coords: centre of rotation
-            cx = self.crop['x'] + (self.crop['width'] / 2)
-            cy = self.crop['y'] + (self.crop['height'] / 2)
-            dx = cx - shape_x
-            dy = cy - shape_y
-            # distance of point from centre of rotation
-            h = sqrt(dx * dx + dy * dy)
-            # and the angle
-            angle1 = atan2(dx, dy)
-
-            # Add the rotation to the angle and calculate new
-            # opposite and adjacent lengths from centre of rotation
-            angle2 = angle1 - radians(rotation)
-            newo = sin(angle2) * h
-            newa = cos(angle2) * h
-            # to give correct x and y within cropped panel
-            shape_x = cx - newo
-            shape_y = cy - newa
-
-        # convert to coords within crop region
-        shape_x = (shape_x - self.crop['x']) * self.scale
-        shape_y = (shape_y - self.crop['y']) * self.scale
-
-        return {'x': shape_x, 'y': shape_y}
-
-    def draw_shape_label(self, shape, bounds):
-        center = bounds.get_center()
-        text = shape.get('text')
-        size = int(shape.get('fontSize', 12) * 2.5)
-        if not text or not center:
-            return
-        r, g, b, a = self.get_rgba_int(shape['strokeColor'])
-        # bump up alpha a bit to make text more readable
-        rgba = (r, g, b, int(128 + a / 2))
-        font = get_font(size)
-        box = font.getbbox(text)
-        width = box[2] - box[0]
-        height = box[3] - box[1]
-        xy = (int(center[0] - width / 2.0), int(center[1] - height / 2.0))
-        self.draw.text(xy, text, fill=rgba, font=font)
-
-    def draw_text(self, shape):
-        text = shape.get('text', '')
-        if not shape.get('showText', True) or text == '':
-            return
-
-        font_size = scale_to_export_dpi(shape.get('fontSize', 12))
-        stroke_color = shape.get('strokeColor', '#FFFFFF')
-        fill_color = shape.get('fillColor', '#000000')
-        fill_opacity = float(shape.get('fillOpacity', 0))
-        anchor = shape.get('textAnchor', "start")
-        text_coords = self.get_panel_coords(shape['x'], shape['y'])
-        x, y = text_coords['x'], text_coords['y']
-
-        r, g, b, a = self.get_rgba_int(stroke_color)
-        font = get_font(font_size)
-        box = font.getbbox(text)
-        txt_w = box[2] - box[0]
-        box = font.getbbox("Mg")  # height including acsenders & descenders
-        txt_h = box[3] - box[1]
-        temp_label = Image.new('RGBA', (txt_w, txt_h), (255, 255, 255, 0))
-        textdraw = ImageDraw.Draw(temp_label)
-        textdraw.text((0, -box[1]), text, font=font, fill=(r, g, b))
-
-        hflip = self.panel.get('horizontal_flip', False)
-        if anchor == "middle":
-            x = x - temp_label.size[0] / 2
-        elif (anchor == "end" and not hflip) or (anchor == "start" and hflip):
-            x = x - temp_label.size[0]
-
-        y = y - txt_h * 0.4
-        x = int(round(x))  # Round before drawing background
-        y = int(round(y))  # to fix text position within the background box
-
-        # draw background color
-        if fill_opacity > 0:
-            pad = scale_to_export_dpi(1)
-            r, g, b, _ = self.get_rgba_int(fill_color)
-            a = int(fill_opacity * 255)
-            height_scale = 0.15
-            box_x = round(x - pad)
-            box_y = round(y - txt_h * height_scale)
-            box_w = round(txt_w + 2 * pad)
-            box_h = round(txt_h * (1 + height_scale) + pad/2)
-            temp_image = Image.new('RGBA', (box_w, box_h))
-            temp_draw = ImageDraw.Draw(temp_image)
-            temp_draw.rectangle((0, 0, box_w, box_h), fill=(r, g, b, a))
-            self.pil_img.paste(temp_image, (box_x, box_y), mask=temp_image)
-
-        # Use label as mask, so transparent part is not pasted
-        self.pil_img.paste(temp_label, (x, y), mask=temp_label)
-
-    def draw_arrow(self, shape):
-
-        start = self.get_panel_coords(shape['x1'], shape['y1'])
-        end = self.get_panel_coords(shape['x2'], shape['y2'])
-        x1 = start['x']
-        y1 = start['y']
-        x2 = end['x']
-        y2 = end['y']
-        head_size = ((float(shape.get('strokeWidth', 1)) * 4) + 5)
-        head_size = scale_to_export_dpi(head_size)
-        stroke_width = scale_to_export_dpi(float(shape.get('strokeWidth', 2)))
-        rgb = ShapeToPdfExport.get_rgb(shape['strokeColor'])
-
-        # Do some trigonometry to get the line angle can calculate arrow points
-        dx = x2 - x1
-        dy = y2 - y1
-        f = -1
-        if dy == 0:
-            line_angle = radians(90)
-            if dx < 0:
-                f = 1
-        else:
-            line_angle = atan(dx / dy)
-            if dy < 0:
-                f = 1
-        # Angle of arrow head is 0.8 radians (0.4 either side of line_angle)
-        arrow_point1_x = x2 + (f * sin(line_angle - 0.4) * head_size)
-        arrow_point1_y = y2 + (f * cos(line_angle - 0.4) * head_size)
-        arrow_point2_x = x2 + (f * sin(line_angle + 0.4) * head_size)
-        arrow_point2_y = y2 + (f * cos(line_angle + 0.4) * head_size)
-        arrow_point_mid_x = x2 + (f * sin(line_angle) * head_size * 0.5)
-        arrow_point_mid_y = y2 + (f * cos(line_angle) * head_size * 0.5)
-
-        points = ((x2, y2),
-                  (arrow_point1_x, arrow_point1_y),
-                  (arrow_point2_x, arrow_point2_y),
-                  (x2, y2)
-                  )
-
-        # Draw Line of arrow - to midpoint of head at full stroke width
-        self.draw.line([(x1, y1), (arrow_point_mid_x, arrow_point_mid_y)],
-                       fill=rgb, width=int(stroke_width))
-        # Draw Arrow head, up to tip at x2, y2
-        self.draw.polygon(points, fill=rgb, outline=rgb)
-        self.draw_shape_label(shape, Bounds((x1, y1), (x2, y2)))
-
-    # Override to not just call draw_polygon, because we want square corners
-    # for rectangles and not the rounded corners draw_polygon creates
-    def draw_rectangle(self, shape):
-        points = [
-            (shape['x'], shape['y']),
-            (shape['x'] + shape['width'], shape['y']),
-            (shape['x'] + shape['width'], shape['y'] + shape['height']),
-            (shape['x'], shape['y'] + shape['height']),
-        ]
-        p = []
-        if shape.get('rotation', 0) != 0:
-            rotation = shape.get('rotation')
-            # rotate around centre of rectangle
-            cx = shape['x'] + shape['width'] / 2
-            cy = shape['y'] + shape['height'] / 2
-            points = [
-                self.apply_rotation(point, [cx, cy], rotation)
-                for point in points
-            ]
-        t = shape.get('transform')
-        for point in points:
-            transformed = self.apply_transform(t, point)
-            coords = self.get_panel_coords(*transformed)
-            p.append((coords['x'], coords['y']))
-        p.append(p[0])
-        points = p
-
-        stroke_width = scale_to_export_dpi(float(shape.get('strokeWidth', 2)))
-        buffer = int(ceil(stroke_width) * 1.5)
-
-        # if fill, draw filled polygon without outline, then add line later
-        # with correct stroke width
-        r, g, b, a = self.get_rgba_int(shape.get('fillColor', '#00000000'))
-        if 'fillOpacity' in shape:
-            a = int(float(shape['fillOpacity']) * 255)
-        rgba = (r, g, b, a)
-
-        # need to draw on separate image and then paste on to get transparency
-        bounds = Bounds(*points).round()
-        offset = (bounds.minx, bounds.miny)
-        points = [
-            (point[0] - offset[0] + buffer, point[1] - offset[1] + buffer)
-            for point in points
-        ]
-        bounds.grow(buffer)
-        temp_image = Image.new('RGBA', bounds.get_size())
-        temp_draw = ImageDraw.Draw(temp_image)
-
-        # if fill color, draw polygon without outline first
-        if rgba[3]:
-            temp_draw.polygon(points, fill=rgba, outline=(0, 0, 0, 0))
-
-        def extend_line(p0, p1, pixels):
-            dx = p1[0] - p0[0]
-            dy = p1[1] - p0[1]
-            d = sqrt(dx * dx + dy * dy)
-            return (
-                p0,
-                (p1[0] + dx * pixels / d, p1[1] + dy * pixels / d)
-            )
-
-        # Draw all the lines (NB: polygon doesn't handle line width)
-        rgba = self.get_rgba_int(shape['strokeColor'])
-        width = int(round(stroke_width))
-        for i in range(4):
-            # extend each line a little bit to fill in the corners
-            line = extend_line(points[i], points[i + 1], width / 2)
-            temp_draw.line(line, fill=rgba, width=width)
-
-        self.pil_img.paste(
-            temp_image, (bounds.minx, bounds.miny), mask=temp_image)
-        self.draw_shape_label(shape, bounds)
-
-    def draw_polygon(self, shape, closed=True):
-        points = []
-        for point in shape['points'].split(" "):
-            # Older polygons/polylines may be 'x,y,'
-            xy = point.split(",")
-            x = xy[0]
-            y = xy[1]
-            coords = self.get_panel_coords(float(x), float(y))
-            points.append((coords['x'], coords['y']))
-
-        if closed:
-            points.append(points[0])
-
-        stroke_width = scale_to_export_dpi(float(shape.get('strokeWidth', 2)))
-        buffer = int(ceil(stroke_width))
-
-        # if fill, draw filled polygon without outline, then add line later
-        # with correct stroke width
-        r, g, b, a = self.get_rgba_int(shape.get('fillColor', '#00000000'))
-        if 'fillOpacity' in shape:
-            a = int(float(shape['fillOpacity']) * 255)
-        rgba = (r, g, b, a)
-
-        # need to draw on separate image and then paste on to get transparency
-        bounds = Bounds(*points).round()
-        offset = (bounds.minx, bounds.miny)
-        points = [
-            (point[0] - offset[0] + buffer, point[1] - offset[1] + buffer)
-            for point in points
-        ]
-        bounds.grow(buffer)
-        temp_image = Image.new('RGBA', bounds.get_size())
-        temp_draw = ImageDraw.Draw(temp_image)
-
-        # if fill color, draw polygon without outline first
-        if closed and rgba[3]:
-            temp_draw.polygon(points, fill=rgba, outline=(0, 0, 0, 0))
-
-        # Draw all the lines (NB: polygon doesn't handle line width)
-        rgba = self.get_rgba_int(shape['strokeColor'])
-        temp_draw.line(points, fill=rgba, width=int(round(stroke_width)))
-        # Draw ellipse at each corner
-        # see https://stackoverflow.com/questions/33187698/
-        r = (stroke_width / 2) * 0.9  # seems to look OK with this size
-        if closed:
-            corners = points[:]
-        else:
-            corners = points[1: -1]
-        for point in corners:
-            temp_draw.ellipse((point[0] - r, point[1] - r,
-                               point[0] + r, point[1] + r), fill=rgba)
-
-        self.pil_img.paste(
-            temp_image, (bounds.minx, bounds.miny), mask=temp_image)
-        self.draw_shape_label(shape, bounds)
-
-    def draw_polyline(self, shape):
-        self.draw_polygon(shape, False)
-
-    def draw_line(self, shape):
-        start = self.get_panel_coords(shape['x1'], shape['y1'])
-        end = self.get_panel_coords(shape['x2'], shape['y2'])
-        x1 = start['x']
-        y1 = start['y']
-        x2 = end['x']
-        y2 = end['y']
-        stroke_width = scale_to_export_dpi(float(shape.get('strokeWidth', 2)))
-        rgba = ShapeToPdfExport.get_rgba_int(shape['strokeColor'])
-        self.draw.line(
-            [(x1, y1), (x2, y2)], fill=rgba, width=int(stroke_width))
-        self.draw_shape_label(shape, Bounds((x1, y1), (x2, y2)))
-
-    def draw_ellipse(self, shape):
-
-        w = int(scale_to_export_dpi(float(shape.get('strokeWidth', 2))))
-        ctr = self.get_panel_coords(shape['x'], shape['y'])
-        cx = ctr['x']
-        cy = ctr['y']
-        rx = self.scale * shape['radiusX']
-        ry = self.scale * shape['radiusY']
-
-        rotation = shape.get('rotation', 0)
-        h_flip = self.panel.get('horizontal_flip', False)
-        v_flip = self.panel.get('vertical_flip', False)
-
-        if v_flip:
-            rotation = - rotation
-        if h_flip:
-            rotation = 180 - rotation
-
-        if v_flip != h_flip:
-            rotation = (rotation - self.panel['rotation']) * -1
-        else:
-            rotation = (rotation + self.panel['rotation']) * -1
-
-        width = int((rx * 2) + w)
-        height = int((ry * 2) + w)
-        temp_ellipse = Image.new('RGBA', (width + 1, height + 1),
-                                 (255, 255, 255, 0))
-        ellipse_draw = ImageDraw.Draw(temp_ellipse)
-        # Draw outer ellipse, then remove inner ellipse with full opacity
-        rgba = ShapeToPdfExport.get_rgba_int(shape['strokeColor'])
-        ellipse_draw.ellipse((0, 0, width, height), fill=rgba)
-
-        r, g, b, a = self.get_rgba_int(shape.get('fillColor', '#00000000'))
-        if 'fillOpacity' in shape:
-            a = int(float(shape['fillOpacity']) * 255)
-        rgba = (r, g, b, a)
-
-        # when rx is ~zero (for a Point, scaled down) don't need inner ellipse
-        if (width - w) >= w:
-            ellipse_draw.ellipse((w, w, width - w, height - w), fill=rgba)
-        temp_ellipse = temp_ellipse.rotate(rotation, resample=Image.BICUBIC,
-                                           expand=True)
-        # Use ellipse as mask, so transparent part is not pasted
-        paste_x = cx - (temp_ellipse.size[0] / 2)
-        paste_y = cy - (temp_ellipse.size[1] / 2)
-        self.pil_img.paste(temp_ellipse, (int(paste_x), int(paste_y)),
-                           mask=temp_ellipse)
-        self.draw_shape_label(shape, Bounds((cx, cy)))
-
-
 class FigureExport(object):
     """
     Super class for exporting various figures, such as PDF or TIFF etc.
     """
 
-    def __init__(self, conn, script_params, export_images=False):
+    def __init__(self, script_params):
 
-        self.conn = conn
         self.script_params = script_params
-        self.export_images = export_images
         # For standalone script, we may have relative or absolute output path
         self.output_path_name = script_params.get("outputPathName")
 
-        self.ns = "omero.web.figure.pdf"
-        self.mimetype = "application/pdf"
-
         figure_json_string = script_params['Figure_JSON']
-        try:
-            # Since unicode can't be wrapped by rstring, py2
-            figure_json_string = figure_json_string.decode('utf8')
-        except AttributeError:
-            # python 3
-            pass
         self.figure_json = self.version_transform_json(
             self._fix_figure_json(json.loads(figure_json_string)))
 
@@ -1099,15 +655,6 @@ class FigureExport(object):
                         shape['strokeWidth'] = stroke_width
         return figure_json
 
-    def get_zip_name(self):
-
-        name = self.figure_name
-        # in case we have path/to/name.pdf, just use name.pdf
-        name = path.basename(name)
-        # Remove commas: causes problems 'duplicate headers' in file download
-        name = name.replace(",", ".")
-        return "%s.zip" % name
-
     def get_figure_file_name(self, page=None):
         """
         For PDF export we will only create a single figure file, but
@@ -1138,33 +685,15 @@ class FigureExport(object):
 
         # Name with extension and folder
         full_name = "%s.%s" % (name, fext)
-
-        index = page if page is not None else 1
-        if fext == "tiff" and self.page_count > 1:
-            full_name = "%s_page_%02d.%s" % (name, index, fext)
-        if self.zip_folder_name is not None:
-            full_name = os.path.join(self.zip_folder_name, full_name)
-
-        while os.path.exists(full_name):
-            index += 1
-            full_name = "%s_page_%02d.%s" % (name, index, fext)
-            if self.zip_folder_name is not None:
-                full_name = os.path.join(self.zip_folder_name, full_name)
-
-        # Handy to know what the last created file is:
-        self.figure_file_name = full_name
-
         return full_name
 
     def build_figure(self):
         """
         The main building of the figure happens here, independently of format.
         We set up directories as needed, call create_figure() to create
-        the PDF or TIFF then iterate through figure pages, adding panels
+        the PDF then iterate through figure pages, adding panels
         for each page.
-        Then we add an info page and create a zip of everything if needed.
-        Finally the created file or zip is uploaded to OMERO and attached
-        as a file annotation to all the images in the figure.
+        Then we add an info page and save the file
         """
 
         # test to see if we've got multiple pages
@@ -1176,42 +705,10 @@ class FigureExport(object):
         page_col_count = ('page_col_count' in self.figure_json and
                           int(self.figure_json['page_col_count']) or 1)
 
-        # Create a zip if we have multiple TIFF pages or we're exporting Images
-        export_option = self.script_params['Export_Option']
-        create_zip = False
-        if self.export_images:
-            create_zip = True
-        if (self.page_count > 1) and (export_option.startswith("TIFF")):
-            create_zip = True
-
-        # somewhere to put PDF and images
-        self.zip_folder_name = None
-        if create_zip:
-            self.zip_folder_name = "figure"
-            curr_dir = os.getcwd()
-            zip_dir = os.path.join(curr_dir, self.zip_folder_name)
-            os.mkdir(zip_dir)
-            if self.export_images:
-                for d in (ORIGINAL_DIR, RESAMPLED_DIR, FINAL_DIR):
-                    img_dir = os.path.join(zip_dir, d)
-                    os.mkdir(img_dir)
-                self.add_read_me_file()
-
         # Create the figure file(s)
         self.create_figure()
 
         panels_json = self.figure_json['panels']
-
-        group_id = None
-        # We get our group from the first image
-        if self.conn is not None and len(panels_json) > 0:
-            try:
-                id1 = int(panels_json[0]['imageId'])
-                group_id = self.conn.getObject(
-                    "Image", id1).getDetails().group.id.val
-            except ValueError:
-                # e.g. imageId is zarr url
-                pass
 
         # For each page, add panels...
         col = 0
@@ -1240,67 +737,6 @@ class FigureExport(object):
         # Saves the completed figure file
         self.save_figure()
 
-        if self.conn is None:
-            # TODO: Return something else??
-            return None
-
-        # PDF will get created in this group
-        if group_id is None:
-            group_id = self.conn.getEventContext().groupId
-        self.conn.SERVICE_OPTS.setOmeroGroup(group_id)
-
-        return self.create_file_annotation()
-
-    def create_file_annotation(self):
-        output_file = self.figure_file_name
-        ns = self.ns
-        mimetype = self.mimetype
-
-        all_image_ids = set()
-        for p in self.figure_json['panels']:
-            try:
-                iid = int(p['imageId'])
-                all_image_ids.add(iid)
-            except ValueError:
-                # e.g. imageId is zarr url
-                pass
-        # Check we can annotate...
-        image_ids = set()
-        for iid in list(all_image_ids):
-            image = self.conn.getObject("Image", iid)
-            if image is not None and image.canAnnotate():
-                image_ids.add(iid)
-
-        if self.zip_folder_name is not None:
-            zip_name = self.get_zip_name()
-            # Recursively zip everything up
-            compress(zip_name, self.zip_folder_name)
-
-            output_file = zip_name
-            ns = "omero.web.figure.zip"
-            mimetype = "application/zip"
-
-        file_ann = self.conn.createFileAnnfromLocalFile(
-            output_file,
-            mimetype=mimetype,
-            ns=ns)
-
-        links = []
-        for iid in list(image_ids):
-            link = ImageAnnotationLinkI()
-            link.parent = ImageI(iid, False)
-            link.child = file_ann._obj
-            links.append(link)
-        if len(links) > 0:
-            # Don't want to fail at this point due to strange permissions combo
-            try:
-                links = self.conn.getUpdateService().saveAndReturnArray(
-                    links, self.conn.SERVICE_OPTS)
-            except Exception:
-                logger.error("Failed to attach figure: %s to images %s"
-                             % (file_ann, image_ids))
-
-        return file_ann
 
     def get_crop_region(self, panel):
         """
@@ -2062,9 +1498,6 @@ class FigureExport(object):
 
         # get cropped image (saving original)
         orig_name = None
-        if self.export_images:
-            orig_name = os.path.join(
-                self.zip_folder_name, ORIGINAL_DIR, img_name)
         pil_img = self.get_panel_image(panel, orig_name)
 
         # for PDF export, we might have a target dpi
@@ -2083,11 +1516,12 @@ class FigureExport(object):
         w, h = pil_img.size
         if w > h:
             new_w = 96
-            new_h = int(h * (96 / w))
+            new_h = h/w * new_w
         else:
             new_h = 96
-            new_w = int(w * (96 / h))
-        pil_img = pil_img.resize((new_w, new_h))
+            new_w = w/h * new_h
+        print("Resizing thumbnail to:", int(new_w), int(new_h))
+        pil_img = pil_img.resize((int(new_w), int(new_h)))
         temp_name = str(idx) + "_thumb.png"
         pil_img.save(temp_name)
         return temp_name
@@ -2124,19 +1558,9 @@ class FigureExport(object):
         para.drawOn(c, margin, page_y - h)
         return page_y - parah - spacer  # reduce the available height
 
-    def add_read_me_file(self):
-        """ Add a simple text file into the zip to explain what's there """
-        read_me_path = os.path.join(self.zip_folder_name, "README.txt")
-        with open(read_me_path, 'w') as f:
-            f.write(README_TXT)
-
     def add_info_page(self, panels_json):
         """Generates a PDF info page with figure title, links to images etc"""
-        script_params = self.script_params
         figure_name = self.figure_name
-        base_url = None
-        if 'Webclient_URI' in script_params:
-            base_url = script_params['Webclient_URI']
         page_height = self.page_height
 
         # Need to sort panels from top (left) -> bottom of Figure
@@ -2154,13 +1578,6 @@ class FigureExport(object):
         # Start adding at the top, update page_y as we add paragraphs
         page_y = page_height - self.margin
         page_y = self.add_para_with_thumb(figure_name, page_y, style=style_h)
-
-        if "Figure_URI" in script_params:
-            file_url = script_params["Figure_URI"]
-            figure_link = ("Link to Figure: <a href='%s' color='blue'>%s</a>"
-                           % (file_url, file_url))
-            page_y = self.add_para_with_thumb(figure_link, page_y,
-                                              style=style_n)
 
         # Add Figure Legend
         if ('legend' in self.figure_json and
@@ -2187,7 +1604,7 @@ class FigureExport(object):
 
         # Go through sorted panels, adding paragraph for each unique image
         for idx, p in enumerate(panels_json):
-            iid = p['imageId']
+            img_url = p['imageId']
             # list unique scalebar lengths
             if 'scalebar' in p and p['scalebar'].get('show'):
                 sb_length = p['scalebar'].get('length')
@@ -2196,18 +1613,12 @@ class FigureExport(object):
                 if sb_units and sb_units in unit_symbols:
                     symbol = unit_symbols[sb_units]['symbol']
                 scalebars.append("%s %s" % (sb_length, symbol))
-            if iid in img_ids:
+            if img_url in img_ids:
                 continue  # ignore images we've already handled
-            img_ids.add(iid)
+            img_ids.add(img_url)
             thumb_src = self.get_thumbnail(p, idx)
-            # thumb = "<img src='%s' width='%s' height='%s' " \
-            #         "valign='middle' />" % (thumbSrc, thumbSize, thumbSize)
             lines = []
             lines.append(p['name'])
-            try:
-                img_url = "%s?show=image-%s" % (base_url, int(iid))
-            except ValueError:
-                img_url = iid
             lines.append(
                 "<a href='%s' color='blue'>%s</a>" % (img_url, img_url))
             # addPara([" ".join(line)])
@@ -2402,16 +1813,7 @@ class FigureExport(object):
             target_w = int(round(target_w))
             target_h = int(round(target_h))
             if target_w > curr_w:
-                if self.export_images:
-                    # Save image BEFORE resampling
-                    rs_name = os.path.join(
-                        self.zip_folder_name, RESAMPLED_DIR, img_name)
-                    pil_img.save(rs_name)
                 pil_img = pil_img.resize((target_w, target_h), Image.BICUBIC)
-
-        # in the folder to zip
-        if self.zip_folder_name is not None:
-            img_name = os.path.join(self.zip_folder_name, FINAL_DIR, img_name)
 
         if is_colorbar:
             # Save the image to a BytesIO stream
@@ -2429,560 +1831,14 @@ class FigureExport(object):
         self.figure_canvas.drawImage(img_name, x, y, width, height)
 
 
-class TiffExport(FigureExport):
-    """
-    Subclass to handle export of Figure as TIFFs, 1 per page.
-    We only need to overwrite methods that actually put content on
-    the TIFF instead of PDF.
-    """
-
-    def __init__(self, conn, script_params, export_images=None):
-
-        super(TiffExport, self).__init__(conn, script_params, export_images)
-
-        self.ns = "omero.web.figure.tiff"
-        self.mimetype = "image/tiff"
-
-    def add_rois(self, panel, page):
-        """ TIFF export doesn't add ROIs to page (does it to panel)"""
-        pass
-
-    def get_figure_file_ext(self):
-        return "tiff"
-
-    def create_figure(self):
-        """
-        Creates a new PIL image ready to receive panels, labels etc.
-        This is created for each page in the figure.
-        """
-        tiff_width = int(scale_to_export_dpi(self.page_width))
-        tiff_height = int(scale_to_export_dpi(self.page_height))
-        rgb = (255, 255, 255)
-        page_color = self.figure_json.get('page_color')
-        if page_color is not None:
-            rgb = ShapeToPdfExport.get_rgb('#' + page_color)
-        self.tiff_figure = Image.new("RGBA", (tiff_width, tiff_height), rgb)
-
-    def add_page_color(self):
-        """ Don't need to do anything for TIFF. Image is already colored."""
-        pass
-
-    def paste_image(self, pil_img, img_name, panel, page,
-                    dpi=None, is_colorbar=False):
-        """ Add the PIL image to the current figure page """
-
-        # Apply flip transformations before drawing the image
-        h_flip = panel.get('horizontal_flip', False)
-        v_flip = panel.get('vertical_flip', False)
-
-        if h_flip:
-            pil_img = pil_img.transpose(Image.FLIP_LEFT_RIGHT)
-        if v_flip:
-            pil_img = pil_img.transpose(Image.FLIP_TOP_BOTTOM)
-
-        x = panel['x']
-        y = panel['y']
-        width = panel['width']
-        height = panel['height']
-
-        # Handle page offsets
-        x = x - page['x']
-        y = y - page['y']
-
-        x2 = scale_to_export_dpi(x + width)
-        y2 = scale_to_export_dpi(y + height)
-        x = scale_to_export_dpi(x)
-        y = scale_to_export_dpi(y)
-        width = x2 - x
-        height = y2 - y
-
-        export_img = self.export_images and not is_colorbar
-        # Save image BEFORE resampling
-        if export_img:
-            rs_name = os.path.join(self.zip_folder_name, RESAMPLED_DIR,
-                                   img_name)
-            pil_img.save(rs_name)
-
-        # Resize to our target size to match DPI of figure
-        pil_img = pil_img.resize((width, height), Image.BICUBIC)
-
-        if export_img:
-            img_name = os.path.join(self.zip_folder_name, FINAL_DIR, img_name)
-            pil_img.save(img_name)
-
-        # Now at full figure resolution - Good time to add shapes...
-        crop = self.get_crop_region(panel)
-        exporter = ShapeToPilExport(pil_img, panel, crop)
-
-        width, height = pil_img.size
-
-        # Add border if needed - Rectangle around the whole panel
-        if 'border' in panel and panel['border'].get('showBorder'):
-            sw = panel['border'].get('strokeWidth')
-            border_width = int(round(scale_to_export_dpi(sw)))
-            border_color = panel['border'].get('color')
-            padding = border_width * 2
-
-            canvas = Image.new("RGB", (width + padding, height + padding),
-                               exporter.get_rgb(border_color))
-            canvas.paste(pil_img, (border_width, border_width))
-            pil_img = canvas
-            box = (x - border_width,
-                   y - border_width,
-                   x + width + border_width,
-                   y + height + border_width)
-        else:
-            box = (x, y, x + width, y + height)
-
-        self.tiff_figure.paste(pil_img, box)
-
-    def draw_scalebar_line(self, x, y, x2, y2, width, rgb):
-        """ Draw line on the current figure page """
-        draw = ImageDraw.Draw(self.tiff_figure)
-
-        x = scale_to_export_dpi(x)
-        y = scale_to_export_dpi(y)
-        x2 = scale_to_export_dpi(x2)
-        y2 = scale_to_export_dpi(y2)
-        width = scale_to_export_dpi(width)
-
-        x, x2 = (x2, x) if x > x2 else (x, x2)
-        y, y2 = (y2, y) if y > y2 else (y, y2)
-
-        # the coordinates are included in the line
-        draw.line([(x, y), (x2, y2)], fill=rgb, width=width)
-
-    def draw_temp_label(self, text, fontsize, rgb):
-        """Returns a new PIL image with text. Handles html."""
-        tokens = self.parse_html(text)
-
-        widths = []
-        heights = []
-        for t in tokens:
-            font = get_font(fontsize, t['bold'], t['italics'])
-            box = font.getbbox(t['text'])
-            txt_w = box[2] - box[0]
-            txt_h = box[3] - box[1]
-            widths.append(txt_w)
-            heights.append(txt_h)
-
-        label_w = sum(widths)
-        label_h = max(heights)
-
-        temp_label = Image.new('RGBA', (label_w, label_h), (255, 255, 255, 0))
-        textdraw = ImageDraw.Draw(temp_label)
-
-        w = 0
-        for t in tokens:
-            font = get_font(fontsize, t['bold'], t['italics'])
-            box = font.getbbox(t['text'])
-            txt_w = box[2] - box[0]
-            txt_h = box[3] - box[1]
-            textdraw.text((w, -box[1]), t['text'], font=font, fill=rgb)
-            w += txt_w
-        return temp_label
-
-    def draw_colorbar_ticks(self, colorbar, ramp_d, labels,
-                            labels_x, labels_y):
-        """ Draw colorbar spine and ticks on the current figure page """
-
-        fontsize = int(colorbar["font_size"])
-        mark_len = colorbar["mark_len"]
-        tick_margin = colorbar["tick_margin"]
-        pos = colorbar["position"]
-        tick_thickness = colorbar.get("tick_thickness", 1)
-        rgb = colorbar["axis_color"]
-        rgb = tuple(int(rgb[i:i+2], 16) for i in (0, 2, 4))
-
-        align = ramp_d["align"]
-
-        # Drawing of the ticks (line + label)
-        draw = ImageDraw.Draw(self.tiff_figure)
-        tick_thick_px = scale_to_export_dpi(tick_thickness)
-        for label, pos_x, pos_y in zip(labels, labels_x, labels_y):
-            # Cosmetic correction flag for first and last label
-            shift = 0
-            if label == labels[0]:
-                shift = -1
-            elif label == labels[-1]:
-                shift = 1
-
-            if pos in ["left", "right"]:
-                x1 = pos_x
-                y1 = pos_y
-                y2 = pos_y
-                y_txt = pos_y - fontsize / 2 + 0.5
-
-                if pos == "left":
-                    x2 = pos_x - mark_len
-                    x_txt = pos_x - mark_len - tick_margin
-                    x1, x2 = x2, x1
-                else:
-                    x2 = pos_x + mark_len
-                    x_txt = pos_x + mark_len + tick_margin
-
-            elif pos in ["top", "bottom"]:
-                x1 = pos_x
-                x2 = pos_x
-                y1 = pos_y
-                x_txt = pos_x
-                if pos == "top":
-                    y2 = pos_y - mark_len
-                    y_txt = pos_y - fontsize - mark_len - tick_margin
-                    y1, y2 = y2, y1
-                else:
-                    y2 = pos_y + mark_len
-                    y_txt = pos_y + mark_len + tick_margin
-
-            x1 = scale_to_export_dpi(x1)
-            y1 = scale_to_export_dpi(y1)
-            x2 = scale_to_export_dpi(x2)
-            y2 = scale_to_export_dpi(y2)
-
-            offset = 1  # Centering the marks
-            offset += int(tick_thick_px/2) * shift  # first or last label
-            if pos in ["left", "right"]:
-                x2 -= 1  # x2/y2 are included in the line, remove last pixel
-                y1, y2 = y1 - offset, y2 - offset
-                y_txt -= tick_thickness / 2 * shift
-            elif pos in ["top", "bottom"]:
-                y2 -= 1
-                x1, x2 = x1 - offset, x2 - offset
-                x_txt -= tick_thickness / 2 * shift
-
-            if mark_len > 0:  # Do not add empty elements
-                # the coordinates are included in the line
-                draw.line([(x1, y1), (x2, y2)],
-                          fill=rgb, width=tick_thick_px)
-
-            self.draw_text(label, x_txt, y_txt, fontsize, rgb, align=align)
-
-        # Draw colorbar spine
-        if pos in ["top", "bottom"]:
-            x1 = ramp_d['x']
-            x2 = ramp_d['x'] + ramp_d['width']
-            y1 = ramp_d['y']
-            if pos == "bottom":
-                y1 += ramp_d['height']
-            y2 = y1
-        elif pos in ["left", "right"]:
-            x1 = ramp_d['x']
-            y1 = ramp_d['y']
-            y2 = ramp_d['y'] + ramp_d['height']
-            if pos == "right":
-                x1 += ramp_d['width']
-            x2 = x1
-
-        x1 = scale_to_export_dpi(x1)
-        y1 = scale_to_export_dpi(y1)
-        x2 = scale_to_export_dpi(x2)
-        y2 = scale_to_export_dpi(y2)
-        # x2/y2 are included in the line, need to remove 'last pixel'
-        if pos in ["left", "right"]:
-            y2 -= 1
-            x1, x2 = x1 - 1, x2 - 1
-        elif pos in ["top", "bottom"]:
-            x2 -= 1
-            y1, y2 = y1 - 1, y2 - 1
-        draw.line([(x1, y1), (x2, y2)], fill=rgb, width=tick_thick_px)
-
-    def parse_html(self, html):
-        """
-        Parse html to give list of tokens with bold or italics
-
-        Returns list of [{'text': txt, 'bold': true, 'italics': false}]
-        """
-        in_bold = False
-        in_italics = False
-
-        # Remove any <p> tags
-        html = html.replace('<p>', '')
-        html = html.replace('</p>', '')
-
-        tokens = []
-        token = ""
-        i = 0
-        while i < len(html):
-            # look for start / end of b or i elements
-            start_bold = html[i:].startswith("<strong>")
-            end_bold = html[i:].startswith("</strong>")
-            start_ital = html[i:].startswith("<em>")
-            end_ital = html[i:].startswith("</em>")
-
-            if start_bold:
-                i += len("<strong>")
-            elif end_bold:
-                i += len("</strong>")
-            elif start_ital:
-                i += len("<em>")
-            elif end_ital:
-                i += len("</em>")
-
-            # if style has changed:
-            if start_bold or end_bold or start_ital or end_ital:
-                # save token with previous style
-                tokens.append({'text': token, 'bold': in_bold,
-                               'italics': in_italics})
-                token = ""
-                if start_bold or end_bold:
-                    in_bold = start_bold
-                elif start_ital or end_ital:
-                    in_italics = start_ital
-            else:
-                token = token + html[i]
-                i += 1
-        tokens.append({'text': token, 'bold': in_bold, 'italics': in_italics})
-        return tokens
-
-    def draw_text(self, text, x, y, fontsize, rgb, align="center"):
-        """ Add text to the current figure page """
-        x = scale_to_export_dpi(x)
-        y = scale_to_export_dpi(y)
-        fontsize = scale_to_export_dpi(fontsize)
-
-        if markdown_imported:
-            # convert markdown to html
-            text = markdown.markdown(text)
-
-        temp_label = self.draw_temp_label(text, fontsize, rgb)
-
-        if align == "left-vertical":
-            temp_label = temp_label.rotate(90, expand=True)
-            y = y - (temp_label.size[1] / 2)
-        elif align == "right-vertical":
-            temp_label = temp_label.rotate(-90, expand=True)
-            y = y - (temp_label.size[1] / 2)
-            x = x - temp_label.size[0]
-        elif align == "center":
-            x = x - (temp_label.size[0] / 2)
-        elif align == "right":
-            x = x - temp_label.size[0]
-
-        if align not in ["left-vertical", "right-vertical"]:
-            # The text in TIFF is higher compared to PDF. Add offset
-            y = y + scale_to_export_dpi(1)
-
-        x = int(round(x))
-        y = int(round(y))
-        # Use label as mask, so transparent part is not pasted
-        self.tiff_figure.paste(temp_label, (x, y), mask=temp_label)
-
-    def save_page(self, page=None):
-        """
-        Save the current PIL image page as a TIFF and start a new
-        PIL image for the next page
-        """
-        self.figure_file_name = self.get_figure_file_name()
-
-        self.tiff_figure.save(self.figure_file_name)
-
-        # Create a new blank tiffFigure for subsequent pages
-        self.create_figure()
-
-    def add_info_page(self, panels_json):
-        """
-        Since we need a PDF for the info page, we create one first,
-        then call superclass add_info_page
-        """
-        # We allow TIFF figure export without reportlab (no Info page)
-        if not reportlab_installed:
-            return
-
-        full_name = "info_page.pdf"
-        if self.zip_folder_name is not None:
-            full_name = os.path.join(self.zip_folder_name, full_name)
-        self.figure_canvas = canvas.Canvas(
-            full_name, pagesize=(self.page_width, self.page_height))
-
-        # Superclass method will call add_para_with_thumb(),
-        # to add lines to self.infoLines
-        super(TiffExport, self).add_info_page(panels_json)
-
-    def save_figure(self):
-        """ Completes PDF figure (or info-page PDF for TIFF export) """
-        # We allow TIFF figure export without reportlab (no Info page)
-        if not reportlab_installed:
-            return
-        self.figure_canvas.save()
-
-
-class OmeroExport(TiffExport):
-
-    def __init__(self, conn, script_params):
-
-        super(OmeroExport, self).__init__(conn, script_params)
-
-        self.new_image = None
-
-    def save_page(self, page=None):
-        """
-        Save the current PIL image page as a new OMERO image and start a new
-        PIL image for the next page
-        """
-        self.figure_file_name = self.get_figure_file_name(page + 1)
-
-        # Try to get a Dataset
-        dataset = None
-        for panel in self.figure_json['panels']:
-            parent = self.conn.getObject('Image', panel['imageId']).getParent()
-            if parent is not None and parent.OMERO_CLASS == 'Dataset':
-                if parent.canLink():
-                    dataset = parent
-                    break
-
-        # Need to specify group for new image
-        group_id = self.conn.getEventContext().groupId
-        if dataset is not None:
-            group_id = dataset.getDetails().group.id.val
-            dataset = dataset._obj  # get the omero.model.DatasetI
-        self.conn.SERVICE_OPTS.setOmeroGroup(group_id)
-
-        description = "Created from OMERO.figure: "
-        url = self.script_params.get("Figure_URI")
-        legend = self.figure_json.get('legend')
-        if url is not None:
-            description += url
-        if legend is not None:
-            description = "%s\n\n%s" % (description, legend)
-
-        img_ids = set()
-        lines = []
-        for p in self.figure_json['panels']:
-            iid = p['imageId']
-            if iid in img_ids:
-                continue  # ignore images we've already handled
-            img_ids.add(iid)
-            lines.append('- Image:%s %s' % (iid, p['name']))
-        description += "Contains images:\n%s" % "\n".join(lines)
-
-        np_array = numpy.asarray(self.tiff_figure)
-        red = np_array[::, ::, 0]
-        green = np_array[::, ::, 1]
-        blue = np_array[::, ::, 2]
-        plane_gen = iter([red, green, blue])
-        self.new_image = self.conn.createImageFromNumpySeq(
-            plane_gen,
-            self.figure_file_name,
-            sizeC=3,
-            description=description, dataset=dataset)
-        # Reset group context
-        self.conn.SERVICE_OPTS.setOmeroGroup(-1)
-        # Create a new blank tiffFigure for subsequent pages
-        self.create_figure()
-
-    def create_file_annotation(self):
-        """Return result of script."""
-
-        # We don't need to create file annotation, but we can return
-        # the new image, which will be returned from the script
-        return self.new_image
-
-
-def export_figure(conn, script_params):
-    # make sure we can find all images
-    if conn is not None:
-        conn.SERVICE_OPTS.setOmeroGroup(-1)
-
-    export_option = script_params['Export_Option']
-
-    if export_option == 'PDF':
-        fig_export = FigureExport(conn, script_params)
-    elif export_option == 'PDF_IMAGES':
-        fig_export = FigureExport(conn, script_params, export_images=True)
-    elif export_option == 'TIFF':
-        fig_export = TiffExport(conn, script_params)
-    elif export_option == 'TIFF_IMAGES':
-        fig_export = TiffExport(conn, script_params, export_images=True)
-    elif export_option == 'OMERO':
-        fig_export = OmeroExport(conn, script_params)
-    return fig_export.build_figure()
-
-
-def run_script():
-    """
-    The main entry point of the script, as called by the client
-    via the scripting service, passing the required parameters.
-    """
-
-    export_options = [rstring('PDF'), rstring('PDF_IMAGES'),
-                      rstring('TIFF'), rstring('TIFF_IMAGES'),
-                      rstring('OMERO')]
-
-    client = scripts.client(
-        'Figure_To_Pdf.py',
-        """Used by web.figure to generate pdf figures from json data""",
-
-        scripts.String("Figure_JSON", optional=False,
-                       description="All figure info as json stringified"),
-
-        scripts.String("Export_Option", values=export_options,
-                       default="PDF"),
-
-        scripts.String("Webclient_URI", optional=False, grouping="4",
-                       description="webclient URL for adding links to images"),
-
-        scripts.String("Figure_Name", grouping="4",
-                       description="Name of the Pdf Figure"),
-
-        scripts.String("Figure_URI",
-                       description="URL to the Figure"),
-
-        # This allows clients to query the script version
-        # by listing script params and getting default value
-        scripts.String("FIGURE_VERSION", default=VERSION)
-    )
-
-    try:
-        script_params = {}
-
-        conn = BlitzGateway(client_obj=client)
-
-        # process the list of args above.
-        for key in client.getInputKeys():
-            if client.getInput(key):
-                script_params[key] = client.getInput(key, unwrap=True)
-
-        # call the main script - returns a file annotation wrapper
-        file_annotation = export_figure(conn, script_params)
-
-        # return this file_annotation to the client.
-        client.setOutput("Message", rstring("Figure created"))
-        if file_annotation is not None:
-            client.setOutput(
-                "New_Figure",
-                robject(file_annotation._obj))
-
-    finally:
-        client.closeSession()
-
-
-# usage:
-# python omero_figure/export_script/figure_to_pdf.py
-
 def handle_main():
 
-    try:
-        if omero_installed:
-            # normal script workflow - uses OMERO connection
-            run_script()
-
-            # If script ran successfully, we're done!
-            return
-    except (PermissionDeniedException, ConnectionRefusedException):
-        # This is a workaround for the fact that the script is not run in a
-        # session, so we need to create one manually.
-
-        print("ClientError: Could not connect to OMERO server.")
-
-    # argparse to allow testing without OMERO
     import argparse
     parser = argparse.ArgumentParser(description='Test Figure to PDF export')
     parser.add_argument("file", help="Path to Figure JSON file")
     parser.add_argument('outputPathName',
                         help=("Relative or absolute path/to/output.pdf. "
                               "Extension is used to set export file type"))
-    parser.add_argument('--omero', action='store_true',
-                        help='Run with OMERO connection')
     args = parser.parse_args()
 
     fpath = args.file
@@ -2994,30 +1850,12 @@ def handle_main():
     file_type = "TIFF" if fext in ['tif', 'tiff'] else "PDF"
 
     script_args = {
-                    "Figure_JSON": json.dumps(figure_json),
-                    "Export_Option": file_type,
-                    "outputPathName": output_path_name,
-                    "Webclient_URI": "http://localhost/webclient/"
-                }
+        "Figure_JSON": json.dumps(figure_json),
+        "outputPathName": output_path_name
+    }
 
-    starttime = datetime.now()
-    if args.omero:
-        print("TESTING: Running with OMERO....")
-        if not omero_installed:
-            print("omero-py not installed.")
-            return
-
-        from omero.cli import cli_login
-        with cli_login() as cli:
-            conn = BlitzGateway(client_obj=cli.get_client())
-            export_figure(conn, script_args)
-    else:
-        print("Running without OMERO....")
-        export_figure(None, script_args)
-
-    endtime = datetime.now()
-    print(f"Elapsed time: {endtime - starttime}")
-
+    fig_export = FigureExport(script_args)
+    fig_export.build_figure()
 
 if __name__ == "__main__":
     handle_main()
